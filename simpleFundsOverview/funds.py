@@ -186,7 +186,7 @@ def init(options, configuration, plugin):
     path = join(basedir, rpc_filename)
     plugin.log("rpc interface located at {}".format(path))
     rpc_interface = LightningRpc(path)
-    plugin.log("Funds Plugin successfully initialezed")
+    plugin.log("Funds Plugin successfully initialized")
     plugin.log("standard unit is set to {}".format(
         plugin.get_option("funds_display_unit")), level="debug")
 
