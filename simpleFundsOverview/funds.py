@@ -18,11 +18,14 @@ unit can be s for satoshi, b for bits, m for milliBitcoin and B for BTC.
 
 
 Author: Rene Pickhardt (https://ln.rene-pickhardt.de)
+Contributor: Vincent Palazzo https://github.com/vincenzopalazzo
+
 Development of the plugin was sponsored by fulmo.org
 You can also support future work at https://tallyco.in/s/lnbook/
 """
 
 import json
+import requests
 
 from lightning.lightning import LightningRpc
 from lightning.plugin import Plugin
@@ -30,6 +33,8 @@ from os.path import join
 
 rpc_interface = None
 plugin = Plugin(autopatch=True)
+
+callApi = "https://api.bitaps.com/market/v1/ticker/"
 
 unit_aliases = {
     "bitcoin": "BTC",
@@ -50,13 +55,38 @@ unit_aliases = {
 unit_divisor = {
     "sat": 1,
     "bit": 100,
-    "mBTC": 100*1000,
-    "BTC": 100*1000*1000,
+    "mBTC": 100 * 1000,
+    "BTC": 100 * 1000 * 1000,
+}
+
+unit_value = {
+    "B": "BTC",
+    "btc": "BTC",
+    "bitcoin": "BTC",
+
+    "m": "mBTC",
+    "milli": "mBTC",
+
+    "b": "bit",
+    "bit": "bit",
+    "bits": "bit",
+
+    "s": "sat",
+    "satoshi": "sat",
+    "satoshis": "sat",
+}
+
+trading_value = {
+    "EUR": "btceur",
+    "eur": "btceur",
+
+    "USD": "btcusd",
+    "usd": "btcusd",
 }
 
 
 @plugin.method("funds")
-def funds(unit=None, plugin=None):
+def funds(unit="s", trading="usd", plugin=None):
     """Lists the total funds the lightning node owns off- and onchain in {unit}.
 
     {unit} can take the following values:
@@ -65,8 +95,12 @@ def funds(unit=None, plugin=None):
     m, milli, btc to depict milliBitcoin
     B, bitcoin, btc to depict Bitcoins
 
-    When not using Satoshis (default) the comma values are rounded off."""
+    When not using Satoshis (default) the comma values are rounded off.
 
+    {trading}
+    EUR, eur = btc to euro value
+    USD, usd = btc to usd value
+    """
     plugin.log("call with unit: {}".format(unit), level="debug")
     if unit is None:
         unit = plugin.get_option("funds_display_unit")
@@ -74,9 +108,15 @@ def funds(unit=None, plugin=None):
     if unit != "B":
         unit = unit_aliases.get(unit.lower(), "sat")
     else:
-        unit = "BTC"
+        unit = unit_value.get(unit)
+        plugin.log(unit)
 
-    div = unit_divisor.get(unit, 1)
+    if trading is None:
+        trading = trading_value.get("USD")
+    else:
+        trading = trading_value.get(trading)
+
+    div = unit_divisor.get(unit)
 
     funds = rpc_interface.listfunds()
 
@@ -85,14 +125,59 @@ def funds(unit=None, plugin=None):
 
     total_funds = onchain_value + offchain_value
 
-    return {
-        'total_'+unit: total_funds//div,
-        'onchain_'+unit: onchain_value//div,
-        'offchain_'+unit: offchain_value//div,
-    }
+    type_network = rpc_interface.getinfo()
+    network = type_network['network']
+    url = callApi + trading
+    response = requests.get(url)
+    print_trading = True
+    if response.status_code is not 200:
+        print_trading = False
+
+    result_total = format(total_funds / div, '.8f')
+    result_on_chain = format(onchain_value / div, '.8f')
+    result_off_chain = format(offchain_value / div, '.8f')
+
+    if print_trading is True:
+        content = response.json()
+        value = 0
+        if content is not None:
+            data = content['data']
+            value = data['last']
+        else:
+            raise Exception("The http response non contains the json object")
+        result_trading_on_chain = format(value * (onchain_value / unit_divisor.get('BTC')), '.8f')
+        result_trading_off_chain = format(value * (offchain_value / unit_divisor.get('BTC')), '.8f')
+        result_trading_total = format(value * (total_funds / unit_divisor.get('BTC')), '.8f')
+
+        if trading == trading_value.get("usd"):
+            trading = "USD"
+        else:
+            trading = "EUR"
+
+        informations = ""
+        if network.lower() == "testnet":
+            informations = "The network is " + network + ", so the " + trading + " not are real :("
+        else:
+            informations = "The network is " + network + ", so the " + trading + " are real :D"
+
+        return {
+            'total ' + unit: result_total + ' ' + unit,
+            'total ' + trading: result_trading_total + ' ' + trading,
+            'onchain ' + unit: result_on_chain + ' ' + unit,
+            'onchain ' + trading: result_trading_on_chain + ' ' + trading,
+            'offchain' + unit: result_off_chain + ' ' + unit,
+            'offchain ' + trading: result_trading_off_chain + ' ' + trading,
+            'informations': informations,
+        }
+    else:
+        return {
+            'total ' + unit: result_total + ' ' + unit,
+            'onchain ' + unit: result_on_chain + ' ' + unit,
+            'offchain' + unit: result_off_chain + ' ' + unit,
+        }
 
 
-@plugin.method("init")
+@plugin.init()
 def init(options, configuration, plugin):
     global rpc_interface
     plugin.log("start initialization of the funds plugin", level="debug")
